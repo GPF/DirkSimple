@@ -95,4 +95,8 @@ but not yet started.
 If you have access to that information, or would like to take the significant
 effort to gather that information, get in touch, please!
 
+run ./dreamcast.sh to run kos-cmake and then cd build;make
+copy your lair.ogv created from the steps above to /data/games/lair and build the cdi image, dc.sh has command I used.
+
+https://github.com/user-attachments/assets/7642aa10-38f4-4cdc-a71d-9cefc66a6654
 
