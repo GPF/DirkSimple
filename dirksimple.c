@@ -1289,10 +1289,18 @@ static void setup_movie(const char *gamepath, DirkSimple_PixFmt pixfmt)
 
     DirkSimple_Io *io = DirkSimple_openfile_read(gamepath);
     if (!io) {
+#ifndef __DREAMCAST__        
+        const size_t slen = 33;
+#else
         const size_t slen = strlen(gamepath) + 5;
+#endif        
         char *gamepath_ext = DirkSimple_xmalloc(slen);
         if (gamepath_ext) {
+#ifndef __DREAMCAST__
             snprintf(gamepath_ext, slen, "%s.ogv", gamepath);
+#else
+            snprintf(gamepath_ext, slen, "/cd/data/games/lair/lair.ogv");
+#endif            
             io = DirkSimple_openfile_read(gamepath_ext);
             DirkSimple_free(gamepath_ext);
         }

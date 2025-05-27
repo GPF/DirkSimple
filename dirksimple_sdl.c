@@ -187,9 +187,9 @@ void DirkSimple_videoformat(const char *gametitle, uint32_t width, uint32_t heig
     if (!GWindow) {
         sdlpanic("Failed to create window");
     }
-
+#ifndef __DREAMCAST__    
     load_icon(GWindow);
-
+#endif
     GRenderer = SDL_CreateRenderer(GWindow, NULL);
     if (!GRenderer) {
         sdlpanic("Failed to create renderer");
@@ -283,7 +283,11 @@ void DirkSimple_drawsprite(DirkSimple_Sprite *sprite, int sx, int sy, int sw, in
     }
 
     if (texture == NULL) {
+#ifdef __DREAMCAST__        
+        texture = SDL_CreateTexture(GRenderer, SDL_PIXELFORMAT_ARGB1555, SDL_TEXTUREACCESS_STATIC, sprite->width, sprite->height);
+#else
         texture = SDL_CreateTexture(GRenderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_STATIC, sprite->width, sprite->height);
+#endif        
         if (!texture) {
             char what[128];
             SDL_snprintf(what, sizeof (what), "Failed to create texture for sprite '%s'", sprite->name);
@@ -538,6 +542,12 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[])
 
 #ifdef DIRKSIMPLE_FORCE_BASE_DIR  // let Linux distros hardcode this to something under /usr/share, or whatever.
     basedir = DIRKSIMPLE_FORCE_BASE_DIR;
+#ifdef __DREAMCAST__
+    gamepath = strdup("data/games/lair"); // Relative to basedir
+    gamename = strdup("lair");
+    GWantFullscreen = true;
+
+#endif    
 #else
     basedir = SDL_GetBasePath();
 #endif
@@ -548,7 +558,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[])
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Failed to determine base dir", errstr, NULL);  // in case this works.
         return SDL_APP_FAILURE;
     }
-
+#ifndef __DREAMCAST__
     for (i = 1; i < argc; i++) {
         const char *arg = argv[i];
         if (*arg == '-') {
@@ -576,13 +586,12 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[])
         SDL_EnumerateDirectory(basedir, find_movie_files, &foundpath);
         gamepath = foundpath;
     }
-
+#endif
     if (!gamepath) {
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Can't find a movie file!", "Include an .ogv file with the build or put it on the command line.", NULL);
         SDL_Quit();
         return SDL_APP_FAILURE;
     }
-
     DirkSimple_startup(basedir, gamepath, gamename, DIRKSIMPLE_PIXFMT_IYUV);
 
     SDL_free(foundpath);

@@ -203,7 +203,9 @@ if(DIRKSIMPLE_SDL)
         set_target_properties(dirksimple PROPERTIES OUTPUT_NAME "dirksimple-wasm")
         set_target_properties(dirksimple PROPERTIES LINK_FLAGS "${IPO_FLAG} -s WASM=1 -s ALLOW_MEMORY_GROWTH=1 -s ASSERTIONS=0 -s EXPORTED_RUNTIME_METHODS=['addRunDependency','removeRunDependency'] -s DEFAULT_LIBRARY_FUNCS_TO_INCLUDE=['$autoResumeAudioContext','$dynCall']")
     endif()
-
+    if(CMAKE_SYSTEM_NAME STREQUAL "Dreamcast")
+        target_link_libraries(dirksimple GL)
+    endif()
     # This is safe to set on all platforms. Otherwise your SDL app will have a terminal window pop up with it on Windows.
     set_property(TARGET dirksimple PROPERTY WIN32_EXECUTABLE TRUE)
 
