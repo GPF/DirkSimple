@@ -11,9 +11,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "lua.h"
-#include "lauxlib.h"
-#include "lualib.h"
+#include "lua/lua.h"
+#include "lua/lauxlib.h"
+#include "lua/lualib.h"
+#include <png/png.h>
 #include <dc/maple.h>
 #include <dc/maple/controller.h>
 
@@ -204,7 +205,7 @@ void DirkSimple_free(void *ptr) { free(ptr); }
 
 static size_t audio_cb(snd_stream_hnd_t hnd, uintptr_t l, uintptr_t r, size_t req) {
     if (atomic_load(&audio_muted) == 1) {
-        printf("🔇 muted: %zu bytes\n", req);
+        // printf("🔇 muted: %zu bytes\n", req);
         memset((void *)l, 0, req);
         if (audio_channels == 2)
             memset((void *)r, 0, req);
@@ -474,8 +475,8 @@ static RenderCommand *new_render_command(RenderPrimitive prim) {
 
 static int luahook_DirkSimple_play_sound(lua_State *L)
 {
-    // RenderCommand *cmd = new_render_command(RENDPRIM_SOUND);
-    // snprintf(cmd->data.sound.name, sizeof (cmd->data.sound.name), "%s", lua_tostring(L, 1));
+    RenderCommand *cmd = new_render_command(RENDPRIM_SOUND);
+    snprintf(cmd->data.sound.name, sizeof (cmd->data.sound.name), "%s", lua_tostring(L, 1));
     return 0;
 }
 
@@ -704,96 +705,63 @@ static void set_string(lua_State *L, const char *str, const char *sym)
     lua_setfield(L, -2, sym);
 }
 
-uint8_t *DirkSimple_loadbmp(const char *fname, int *_w, int *_h)
-{
-    // long flen = 0;
-    // uint8_t *fbuf = DirkSimple_loadmedia(fname, &flen);
-    // uint8_t *pixels = fbuf ? loadbmp_from_memory(fname, fbuf, flen, _w, _h) : NULL;
-    // DirkSimple_free(fbuf);
-    // return (uint8_t *) pixels;
-}
+// uint8_t *DirkSimple_loadbmp(const char *fname, int *_w, int *_h)
+// {
+//     // long flen = 0;
+//     // uint8_t *fbuf = DirkSimple_loadmedia(fname, &flen);
+//     // uint8_t *pixels = fbuf ? loadbmp_from_memory(fname, fbuf, flen, _w, _h) : NULL;
+//     // DirkSimple_free(fbuf);
+//     // return (uint8_t *) pixels;
+// }
 
 uint8_t *DirkSimple_loadpng(const char *fname, int *_w, int *_h)
 {
-    // unsigned char *pixels = NULL;
-    // long flen = 0;
-    // uint8_t *fbuf = DirkSimple_loadmedia(fname, &flen);
-    // if (fbuf) {
-    //     unsigned uw = 0;
-    //     unsigned uh = 0;
-    //     if (lodepng_decode32(&pixels, &uw, &uh, (const unsigned char *) fbuf, (size_t) flen) == 0) {
-    //         *_w = (int) uw;
-    //         *_h = (int) uh;
-    //     } else {
-    //         lodepng_free(pixels);
-    //         pixels = NULL;
-    //         *_w = *_h = 0;
-    //     }
-    //     DirkSimple_free(fbuf);
-    // }
-    // return (uint8_t *) pixels;
-}
+    // Let get_cached_sprite() use this to allocate PVR memory
+    pvr_ptr_t tex = pvr_mem_malloc(512 * 32 * 2);  // adjust size if needed
+    png_to_texture(fname, tex, PNG_NO_ALPHA);
 
+    if (_w) *_w = 512;  // your sprite sheet dimensions
+    if (_h) *_h = 32;
+
+    return (uint8_t *)tex;
+}
 
 static DirkSimple_Sprite *get_cached_sprite(const char *name)
 {
-    DirkSimple_Sprite *sprite = NULL;
+    if (GSprites) return GSprites;  // Already loaded
 
-    // // lowercase the name, just in case.
-    // char *loweredname = DirkSimple_xstrdup(name);
-    // int i;
-    // for (i = 0; name[i]; i++) {
-    //     char ch = name[i];
-    //     if ((ch >= 'A') && (ch <= 'Z')) {
-    //         loweredname[i] = ch - ('A' - 'a');
-    //     }
-    // }
-    // name = loweredname;
+    // Lowercase the sprite name
+    char *loweredname = DirkSimple_xstrdup(name);
+    for (int i = 0; loweredname[i]; i++) {
+        if (loweredname[i] >= 'A' && loweredname[i] <= 'Z')
+            loweredname[i] = loweredname[i] - ('A' - 'a');
+    }
 
-    // for (sprite = GSprites; sprite != NULL; sprite = sprite->next) {
-    //     if (strcmp(sprite->name, loweredname) == 0) {
-    //         DirkSimple_free(loweredname);
-    //         return sprite;  // already cached.
-    //     }
-    // }
+    // Build full path: GGameDir + name + ".png"
+    const size_t slen = strlen(GGameDir) + strlen(loweredname) + 8;
+    char *sprite_png = DirkSimple_xmalloc(slen);
+    snprintf(sprite_png, slen, "%s%s.png", GGameDir, loweredname);
 
-    // // not cached yet, load it from disk.
-    // int w, h;
-    // uint8_t *rgba;
+    int w, h;
+    pvr_ptr_t tex = (pvr_ptr_t)DirkSimple_loadpng(sprite_png, &w, &h);
+    DirkSimple_free(sprite_png);
 
-    // const size_t slen = strlen(GGameDir) + strlen(name) + 8;
-    // char *fname = (char *) DirkSimple_xmalloc(slen);
-    // snprintf(fname, slen, "%s%s.png", GGameDir, name);
-    // rgba = DirkSimple_loadpng(fname, &w, &h);
-    // if (!rgba) {  // maybe it's a bitmap?
-    //     snprintf(fname, slen, "%s%s.bmp", GGameDir, name);
-    //     rgba = DirkSimple_loadbmp(fname, &w, &h);
-    // }
+    if (!tex) {
+        DirkSimple_panic("Failed to load sprite PNG");
+    }
 
-    // if (rgba) {
-    //     DirkSimple_log("Loaded sprite '%s': %dx%d, RGBA", fname, w, h);
-    // }
-
-    // DirkSimple_free(fname);
-
-    // if (!rgba) {
-    //     char errmsg[128];
-    //     snprintf(errmsg, sizeof (errmsg), "Failed to load needed sprite '%s'. Check your installation?", name);
-    //     DirkSimple_panic(errmsg);
-    // }
-
-    // sprite = (DirkSimple_Sprite *) DirkSimple_xmalloc(sizeof (DirkSimple_Sprite));
-    // sprite->name = loweredname;
-    // sprite->width = w;
-    // sprite->height = h;
-    // sprite->rgba = rgba;
-    // sprite->platform_handle = NULL;
-    // sprite->next = GSprites;
-
-    // GSprites = sprite;
-
+    DirkSimple_Sprite *sprite = (DirkSimple_Sprite *) DirkSimple_xmalloc(sizeof (DirkSimple_Sprite));
+    sprite->name = loweredname;
+    sprite->width = w;
+    sprite->height = h;
+    sprite->rgba = (uint8_t *) tex;
+    sprite->platform_handle = (void *) tex;
+    sprite->next = NULL;
+    GSprites = sprite;
     return sprite;
 }
+
+
 
 float *DirkSimple_loadwav(const char *fname, int *_numframes, const int wantchannels, int wantfreq)
 {
@@ -818,59 +786,46 @@ float *DirkSimple_loadwav(const char *fname, int *_numframes, const int wantchan
 
 static DirkSimple_Wave *get_cached_wave(const char *name)
 {
-    DirkSimple_Wave *wave = NULL;
-    int frames = 0;
-
-    // if (!GAudioChannels || !GAudioFreq) {
-    //     DirkSimple_log("Attempting to use wave '%s' before laserdisc is ready!", name);
-    //     return NULL;
-    // }
-
-    // lowercase the name, just in case.
+    // Lowercase copy of the name
     char *loweredname = DirkSimple_xstrdup(name);
-    int i;
-    for (i = 0; name[i]; i++) {
+    for (int i = 0; name[i]; i++) {
         char ch = name[i];
-        if ((ch >= 'A') && (ch <= 'Z')) {
+        if (ch >= 'A' && ch <= 'Z') {
             loweredname[i] = ch - ('A' - 'a');
         }
     }
-    name = loweredname;
 
-    for (wave = GWaves; wave != NULL; wave = wave->next) {
+    // Check if already cached
+    for (DirkSimple_Wave *wave = GWaves; wave != NULL; wave = wave->next) {
         if (strcmp(wave->name, loweredname) == 0) {
             DirkSimple_free(loweredname);
-            return wave;  // already cached.
+            return wave;
         }
     }
 
-    // not cached yet, load it from disk.
-    const size_t slen = strlen(GGameDir) + strlen(name) + 8;
+    const size_t slen = strlen(GGameDir) + strlen(loweredname) + 8;
     char *fname = (char *) DirkSimple_xmalloc(slen);
-    snprintf(fname, slen, "%s%s.wav", GGameDir, name);
-
-    float *pcm = DirkSimple_loadwav(fname, &frames, GAudioChannels, GAudioFreq);
-    if (pcm) {
-        DirkSimple_log("Loaded wave '%s': %d channels, %dHz", fname, GAudioChannels, GAudioFreq);
-    }
-
+    snprintf(fname, slen, "%s%s.wav", GGameDir, loweredname);
+    // printf("[audio] Loading wave '%s' from '%s'", loweredname, fname);
+    // Load via KOS SFX manager
+    sfxhnd_t sfx = snd_sfx_load(fname);
     DirkSimple_free(fname);
 
-    if (!pcm) {
+    if (sfx < 0) {
         char errmsg[128];
-        snprintf(errmsg, sizeof (errmsg), "Failed to load needed wave '%s'. Check your installation?", name);
+        snprintf(errmsg, sizeof(errmsg),
+                 "Failed to load wave '%s'. Check your installation?", loweredname);
         DirkSimple_panic(errmsg);
     }
 
-    wave = (DirkSimple_Wave *) DirkSimple_xmalloc(sizeof (DirkSimple_Wave));
+    DirkSimple_Wave *wave = (DirkSimple_Wave *) DirkSimple_xmalloc(sizeof(DirkSimple_Wave));
     wave->name = loweredname;
-    wave->numframes = frames;
-    wave->pcm = pcm;
-    wave->duration_ticks = (uint64_t) ((((float) frames) / ((float) GAudioFreq)) * 1000.0f);
+    wave->numframes = 0;
+    wave->pcm = NULL;
+    wave->duration_ticks = 0;
     wave->ticks_when_available = 0;
-    wave->platform_handle = NULL;
+    wave->platform_handle = (void *)(intptr_t)sfx;  // safe cast
     wave->next = GWaves;
-
     GWaves = wave;
 
     return wave;
@@ -905,21 +860,21 @@ void send_rendering_primitives(void) {
 }
 
 
-void DirkSimple_beginframe(void)
-{
-    pvr_scene_begin();
-    pvr_list_begin(PVR_LIST_OP_POLY);  // FMV / video layer
+// void DirkSimple_beginframe(void)
+// {
+//     pvr_scene_begin();
+//     pvr_list_begin(PVR_LIST_OP_POLY);  // FMV / video layer
     
-}
+// }
 
-void DirkSimple_endframe(void)
-{
-    pvr_list_finish();                 // End FMV poly list
-    pvr_list_begin(PVR_LIST_TR_POLY); // Begin transparent overlay list
-    send_rendering_primitives();      // Draw hints, overlays, etc
-    pvr_list_finish();
-    pvr_scene_finish();
-}
+// void DirkSimple_endframe(void)
+// {
+//     pvr_list_finish();                 // End FMV poly list
+//     pvr_list_begin(PVR_LIST_TR_POLY); // Begin transparent overlay list
+//     send_rendering_primitives();      // Draw hints, overlays, etc
+//     pvr_list_finish();
+//     pvr_scene_finish();
+// }
 
 
 
@@ -1020,9 +975,9 @@ uint64_t poll_controller_input(void) {
     if (dev && dev->status_valid) {
         cont_state_t *state = (cont_state_t *)maple_dev_status(dev);
         if (state) {
-            if (state->buttons != 0) {
-                printf("🎮 poll_controller_input(): buttons=0x%04lX\n", state->buttons);
-            }
+            // if (state->buttons != 0) {
+            //     printf("🎮 poll_controller_input(): buttons=0x%04lX\n", state->buttons);
+            // }
 
 
             if (state->buttons & CONT_START) {
@@ -1031,35 +986,35 @@ uint64_t poll_controller_input(void) {
             }            
             if (state->buttons & CONT_A) {
                 inputbits |= DIRKSIMPLE_INPUT_ACTION1;
-                printf("🅰️ CONT_A detected\n");
+                // printf("🅰️ CONT_A detected\n");
             }
             if (state->buttons & CONT_X) {
                 inputbits |= DIRKSIMPLE_INPUT_ACTION2;
-                printf("❌ CONT_X detected\n");
+                // printf("❌ CONT_X detected\n");
             }
             if (state->buttons & CONT_B) {
                 inputbits |= DIRKSIMPLE_INPUT_COINSLOT;
-                printf("🅱️ CONT_B (Coin Slot) detected\n");
+                // printf("🅱️ CONT_B (Coin Slot) detected\n");
             }
             if (state->buttons & CONT_Y) {
                 inputbits |= DIRKSIMPLE_INPUT_START;
-                printf("🟡 CONT_Y (Start) detected\n");
+                // printf("🟡 CONT_Y (Start) detected\n");
             }
             if (state->buttons & CONT_DPAD_UP) {
                 inputbits |= DIRKSIMPLE_INPUT_UP;
-                printf("⬆️ D-Pad UP detected\n");
+                // printf("⬆️ D-Pad UP detected\n");
             }
             if (state->buttons & CONT_DPAD_DOWN) {
                 inputbits |= DIRKSIMPLE_INPUT_DOWN;
-                printf("⬇️ D-Pad DOWN detected\n");
+                // printf("⬇️ D-Pad DOWN detected\n");
             }
             if (state->buttons & CONT_DPAD_LEFT) {
                 inputbits |= DIRKSIMPLE_INPUT_LEFT;
-                printf("⬅️ D-Pad LEFT detected\n");
+                // printf("⬅️ D-Pad LEFT detected\n");
             }
             if (state->buttons & CONT_DPAD_RIGHT) {
                 inputbits |= DIRKSIMPLE_INPUT_RIGHT;
-                printf("➡️ D-Pad RIGHT detected\n");
+                // printf("➡️ D-Pad RIGHT detected\n");
             }
         }
     } else {
@@ -1248,7 +1203,7 @@ void DirkSimple_start_clip(uint32_t startms) {
     DirkSimple_log("START CLIP: GTicks %llu, startms %u → frame %d", GTicks, startms, frame);
 
     atomic_store(&seek_request, frame);
-    // GClipStartTicks is set in fmv_tick after actual seek
+    collect_lua_garbage(GLua);
 }
 
 int luahook_DirkSimple_start_clip(lua_State *L)
@@ -1503,43 +1458,42 @@ void DirkSimple_drawsprite(DirkSimple_Sprite *sprite, int sx, int sy, int sw, in
                            int dx, int dy, int dw, int dh,
                            uint8_t rmod, uint8_t gmod, uint8_t bmod)
 {
-    // printf("draw sprite\n");
-    // if (!sprite || !sprite->rgba) return;
+    // printf("📦 drawsprite name=%s sx=%d sy=%d dx=%d dy=%d\n", sprite->name, sx, sy, dx, dy);
+    if (!sprite || !sprite->rgba) return;
 
-    // For now just make a colored quad as a placeholder
-    uint32_t color = (0x80 << 24) | (rmod << 16) | (gmod << 8) | bmod; 
+    pvr_ptr_t tex = (pvr_ptr_t)sprite->platform_handle;
+    float u0 = (float)sx / sprite->width;
+    float v0 = (float)sy / sprite->height;
+    float u1 = (float)(sx + sw) / sprite->width;
+    float v1 = (float)(sy + sh) / sprite->height;
 
     pvr_poly_cxt_t cxt;
     pvr_poly_hdr_t poly;
-
-    pvr_poly_cxt_col(&cxt, PVR_LIST_TR_POLY);
+    pvr_poly_cxt_txr(&cxt, PVR_LIST_TR_POLY,
+        PVR_TXRFMT_ARGB4444, sprite->width, sprite->height, tex, PVR_FILTER_BILINEAR);
     cxt.gen.alpha = PVR_ALPHA_ENABLE;
     cxt.gen.culling = PVR_CULLING_NONE;
     pvr_poly_compile(&poly, &cxt);
     pvr_prim(&poly, sizeof(poly));
+
+    uint32_t color = (0xFF << 24) | (rmod << 16) | (gmod << 8) | bmod;
 
     pvr_vertex_t vtx;
     vtx.flags = PVR_CMD_VERTEX;
     vtx.z = 1.0f;
     vtx.argb = color;
     vtx.oargb = 0;
-    vtx.u = vtx.v = 0.0f;
 
-    vtx.x = dx;         vtx.y = dy;
+    vtx.x = dx;         vtx.y = dy;         vtx.u = u0; vtx.v = v0;
     pvr_prim(&vtx, sizeof(vtx));
-    vtx.x = dx + dw;    vtx.y = dy;
+    vtx.x = dx + dw;    vtx.y = dy;         vtx.u = u1; vtx.v = v0;
     pvr_prim(&vtx, sizeof(vtx));
-    vtx.x = dx;         vtx.y = dy + dh;
+    vtx.x = dx;         vtx.y = dy + dh;    vtx.u = u0; vtx.v = v1;
     pvr_prim(&vtx, sizeof(vtx));
     vtx.flags = PVR_CMD_VERTEX_EOL;
-    vtx.x = dx + dw;    vtx.y = dy + dh;
+    vtx.x = dx + dw;    vtx.y = dy + dh;    vtx.u = u1; vtx.v = v1;
     pvr_prim(&vtx, sizeof(vtx));
 }
-
-
-
-
-
 
 void DirkSimple_destroysprite(DirkSimple_Sprite *sprite)
 {
@@ -1552,33 +1506,15 @@ void DirkSimple_destroysprite(DirkSimple_Sprite *sprite)
 
 void DirkSimple_playwave(DirkSimple_Wave *wave)
 {
-    // PlayingWave *pw = GPlayingWaves;
-    // while (pw != NULL) {
-    //     if (SDL_GetAudioStreamAvailable(pw->stream) == 0) {  // if zero, it's free to reuse.
-    //         break;
-    //     }
-    //     pw = pw->next;
-    // }
+    // printf("playwave: %s\n", wave ? wave->name : "NULL");
+    if (!wave || !wave->platform_handle) return;
+    sfxhnd_t sfx = (sfxhnd_t)(intptr_t)wave->platform_handle;  // cast back
+    if (sfx < 0) return;
 
-    // if (pw == NULL) {  // need a new audio stream!
-    //     pw = DirkSimple_xmalloc(sizeof (PlayingWave));
-    //     pw->stream = SDL_CreateAudioStream(&GAudioSpec, NULL);
-    //     if (pw->stream == NULL) {
-    //         SDL_free(pw);
-    //         return;
-    //     } else if (!SDL_BindAudioStream(GAudioDeviceID, pw->stream)) {
-    //         SDL_DestroyAudioStream(pw->stream);
-    //         SDL_free(pw);
-    //         return;
-    //     }
-    //     pw->next = GPlayingWaves;
-    //     GPlayingWaves = pw;
-    // }
-
-    // SDL_PutAudioStreamData(pw->stream, wave->pcm, wave->numframes * GAudioSpec.channels * SDL_AUDIO_BYTESIZE(GAudioSpec.format));
-    // SDL_FlushAudioStream(pw->stream);
+    const uint8_t volume = 255;
+    const uint8_t pan = 128;  // CENTER
+    snd_sfx_play(sfx, volume, pan);
 }
-
 
 
 void DirkSimple_startup(const char *basedir, const char *gamepath, const char *gamename, DirkSimple_PixFmt pixfmt) {
@@ -1771,7 +1707,7 @@ static void call_lua_tick(lua_State *L, uint64_t ticks, uint64_t clipstartticks,
     lua_pop(L, 1);  // pop the namespace
 
     // Clean up any Lua tick waste.
-    collect_lua_garbage(L);  // we can move this to start_clip if it turns out to be too heavy.
+    // collect_lua_garbage(L);  // we can move this to start_clip if it turns out to be too heavy.
 }
 
 static void fmv_tick(uint64_t now_ms) {
