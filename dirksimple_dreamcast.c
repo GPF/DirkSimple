@@ -67,8 +67,8 @@ static uint64_t GTicksOffset = 0;
 static int GDecoderActive = 0;
 static atomic_int seek_request = -1;
 static int GRestartOnYPress = 0;
-static int GAudioChannels = 0;
-static int GAudioFreq = 0;
+// static int GAudioChannels = 0;
+// static int GAudioFreq = 0;
 #define SCREEN_WIDTH 640
 #define SCREEN_HEIGHT 480
 
@@ -727,13 +727,13 @@ static void set_string(lua_State *L, const char *str, const char *sym)
 uint8_t *DirkSimple_loadpng(const char *fname, int *_w, int *_h)
 {
     // Let get_cached_sprite() use this to allocate PVR memory
-    pvr_ptr_t tex = pvr_mem_malloc(512 * 32 * 2);  // adjust size if needed
-    png_to_texture(fname, tex, PNG_NO_ALPHA);
+    sprite_txr = pvr_mem_malloc(512 * 32 * 2);  // adjust size if needed
+    png_to_texture(fname, sprite_txr, PNG_NO_ALPHA);
 
     if (_w) *_w = 512;  // your sprite sheet dimensions
     if (_h) *_h = 32;
 
-    return (uint8_t *)tex;
+    return (uint8_t *)sprite_txr;
 }
 
 static DirkSimple_Sprite *get_cached_sprite(const char *name)
@@ -1925,19 +1925,19 @@ int main(int argc, char **argv) {
 
 
 
-const char *DirkSimple_gamename(void) {
-    return "lair";
-}
+// const char *DirkSimple_gamename(void) {
+//     return "lair";
+// }
 
 
-const char *DirkSimple_datadir(void) {
-    return "/pc/data";
-}
+// const char *DirkSimple_datadir(void) {
+//     return "/pc/data";
+// }
 
 
-const char *DirkSimple_gamedir(void) {
-    return "/pc/data/games/lair";
-}
+// const char *DirkSimple_gamedir(void) {
+//     return "/pc/data/games/lair";
+// }
 
 
 
