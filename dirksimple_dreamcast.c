@@ -4,8 +4,9 @@
 #include <kos.h>
 #include <dc/sound/stream.h>
 #include <dc/pvr.h>
-#define ZSTD_STATIC_LINKING_ONLY
-#include <zstd/zstd.h>
+// #define ZSTD_STATIC_LINKING_ONLY
+// #include <zstd/zstd.h>
+#include <lz4/lz4.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -115,7 +116,7 @@ enum BufState {
     BUF_READY = 2
 };
 
-static ZSTD_DCtx *dctx;
+// static ZSTD_DCtx *dctx;
 static FILE *fp = NULL;
 static FILE *audio_fp = NULL;
 static uint8_t *compressed_buffer = NULL;
@@ -267,10 +268,21 @@ static int load_frame(int frame_num, int buf_index) {
     uint32_t compressed_size = next_offset - offset;
     fseek(fp, offset, SEEK_SET);
     fread(compressed_buffer, 1, compressed_size, fp);
-    size_t decompressed = ZSTD_decompressDCtx(dctx, frame_buffer[buf_index], video_frame_size,
-                                              compressed_buffer, compressed_size);
-    // printf("[frame %d] %u -> %zu bytes\n", frame_num, compressed_size, decompressed);
-    return ZSTD_isError(decompressed) ? -1 : 0;
+    // size_t decompressed = ZSTD_decompressDCtx(dctx, frame_buffer[buf_index], video_frame_size,
+    //                                           compressed_buffer, compressed_size);
+    // // printf("[frame %d] %u -> %zu bytes\n", frame_num, compressed_size, decompressed);
+    // return ZSTD_isError(decompressed) ? -1 : 0;
+    int decompressed = LZ4_decompress_fast(
+    (const char *)compressed_buffer,
+    (char *)frame_buffer[buf_index],
+    video_frame_size);
+
+    if (decompressed < 0) {
+        printf("❌ LZ4 decompression failed on frame %d\n", frame_num);
+        return -1;
+    }
+    return 0;
+
 }
 
 static void draw_frame(int buf_index) {
@@ -1491,7 +1503,7 @@ void DirkSimple_drawsprite(DirkSimple_Sprite *sprite, int sx, int sy, int sw, in
                            int dx, int dy, int dw, int dh,
                            uint8_t rmod, uint8_t gmod, uint8_t bmod)
 {
-    printf("draw sprite\n");
+    // printf("draw sprite\n");
     // if (!sprite || !sprite->rgba) return;
 
     // For now just make a colored quad as a placeholder
@@ -1571,14 +1583,14 @@ void DirkSimple_playwave(DirkSimple_Wave *wave)
 
 void DirkSimple_startup(const char *basedir, const char *gamepath, const char *gamename, DirkSimple_PixFmt pixfmt) {
     (void)basedir; (void)gamepath; (void)gamename; (void)pixfmt;
-        dctx = ZSTD_createDCtx();
-        ZSTD_DCtx_setParameter(dctx, ZSTD_d_format, ZSTD_f_zstd1_magicless);
-        ZSTD_DCtx_setParameter(dctx, ZSTD_d_windowLogMax, 15);
-        ZSTD_DCtx_setParameter(dctx, ZSTD_d_forceIgnoreChecksum, 1);
-        ZSTD_DCtx_setParameter(dctx, ZSTD_d_refMultipleDDicts, ZSTD_rmd_refSingleDDict);
-        ZSTD_DCtx_setParameter(dctx, ZSTD_d_maxBlockSize, 65536);
-        ZSTD_DCtx_refDDict(dctx, NULL);
-        ZSTD_DCtx_reset(dctx, ZSTD_reset_session_only);    
+        // dctx = ZSTD_createDCtx();
+        // ZSTD_DCtx_setParameter(dctx, ZSTD_d_format, ZSTD_f_zstd1_magicless);
+        // ZSTD_DCtx_setParameter(dctx, ZSTD_d_windowLogMax, 15);
+        // ZSTD_DCtx_setParameter(dctx, ZSTD_d_forceIgnoreChecksum, 1);
+        // ZSTD_DCtx_setParameter(dctx, ZSTD_d_refMultipleDDicts, ZSTD_rmd_refSingleDDict);
+        // ZSTD_DCtx_setParameter(dctx, ZSTD_d_maxBlockSize, 65536);
+        // ZSTD_DCtx_refDDict(dctx, NULL);
+        // ZSTD_DCtx_reset(dctx, ZSTD_reset_session_only);    
         atomic_store(&audio_muted, 1);
     fp = fopen(gamepath, "rb");
     if (!fp) {

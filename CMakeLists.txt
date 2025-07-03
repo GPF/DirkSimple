@@ -50,8 +50,7 @@ target_link_libraries(dirksimple_dreamcast
     dirksimple-lua
     dirksimple-lodepng
     m z
-    zstd
-    fastmem
+    lz4
 )
 
 # Compile-time override for base path (optional)
