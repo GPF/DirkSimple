@@ -107,7 +107,7 @@ static int GNumRenderCommands = 0;
 static int GNumAllocatedRenderCommands = 0;
 void send_rendering_primitives(void);
 #define DCMV_MAGIC "DCMV"
-#define NUM_BUFFERS 16
+#define NUM_BUFFERS 4
 #define RING_CAPACITY (NUM_BUFFERS + 1)
 #define INVALID_FRAME -1
 
@@ -127,7 +127,10 @@ static int frame_type,video_width, video_height, sample_rate, num_frames, video_
 static float fps, frame_duration;
 static pvr_ptr_t pvr_txr;
 static pvr_poly_hdr_t hdr;
+static pvr_ptr_t sprite_txr;
+static pvr_poly_hdr_t sprite_hdr;
 static pvr_vertex_t vert[4];
+static pvr_vertex_t sprite_vert[4];
 static snd_stream_hnd_t stream;
 
 static atomic_int frame_index = 0;
@@ -260,6 +263,13 @@ void DirkSimple_videoformat(const char *title, uint32_t w, uint32_t h, double _f
     vert[1] = (pvr_vertex_t){.flags = PVR_CMD_VERTEX, .x=640, .y=0, .z=1, .u=1, .v=0, .argb=0xffffffff};
     vert[2] = (pvr_vertex_t){.flags = PVR_CMD_VERTEX, .x=0, .y=480, .z=1, .u=0, .v=1, .argb=0xffffffff};
     vert[3] = (pvr_vertex_t){.flags = PVR_CMD_VERTEX_EOL, .x=640, .y=480, .z=1, .u=1, .v=1, .argb=0xffffffff};
+    // pvr_poly_cxt_t sprite_cxt;
+    // sprite_txr = NULL; 
+    // pvr_poly_cxt_txr(&sprite_cxt, PVR_LIST_TR_POLY,
+    //     PVR_TXRFMT_ARGB4444, 512, 32, NULL, PVR_FILTER_BILINEAR);
+    // sprite_cxt.gen.alpha = PVR_ALPHA_ENABLE;
+    // sprite_cxt.gen.culling = PVR_CULLING_NONE;
+    // pvr_poly_compile(&sprite_hdr, &sprite_cxt);
     printf("[video] %ldx%ld @ %.2f fps\n", w, h, _fps);
 }
 
@@ -730,14 +740,14 @@ static DirkSimple_Sprite *get_cached_sprite(const char *name)
 {
     if (GSprites) return GSprites;  // Already loaded
 
-    // Lowercase the sprite name
+    // Lowercase name
     char *loweredname = DirkSimple_xstrdup(name);
     for (int i = 0; loweredname[i]; i++) {
         if (loweredname[i] >= 'A' && loweredname[i] <= 'Z')
             loweredname[i] = loweredname[i] - ('A' - 'a');
     }
 
-    // Build full path: GGameDir + name + ".png"
+    // Build full path
     const size_t slen = strlen(GGameDir) + strlen(loweredname) + 8;
     char *sprite_png = DirkSimple_xmalloc(slen);
     snprintf(sprite_png, slen, "%s%s.png", GGameDir, loweredname);
@@ -750,7 +760,16 @@ static DirkSimple_Sprite *get_cached_sprite(const char *name)
         DirkSimple_panic("Failed to load sprite PNG");
     }
 
-    DirkSimple_Sprite *sprite = (DirkSimple_Sprite *) DirkSimple_xmalloc(sizeof (DirkSimple_Sprite));
+    // Compile sprite header once here
+    pvr_poly_cxt_t sprite_cxt;
+    pvr_poly_cxt_txr(&sprite_cxt, PVR_LIST_TR_POLY,
+        PVR_TXRFMT_ARGB4444, w, h, tex, PVR_FILTER_BILINEAR);
+    sprite_cxt.gen.alpha = PVR_ALPHA_ENABLE;
+    sprite_cxt.gen.culling = PVR_CULLING_NONE;
+    pvr_poly_compile(&sprite_hdr, &sprite_cxt);
+
+    // Store and return sprite
+    DirkSimple_Sprite *sprite = DirkSimple_xmalloc(sizeof (DirkSimple_Sprite));
     sprite->name = loweredname;
     sprite->width = w;
     sprite->height = h;
@@ -760,6 +779,7 @@ static DirkSimple_Sprite *get_cached_sprite(const char *name)
     GSprites = sprite;
     return sprite;
 }
+
 
 
 
@@ -1458,42 +1478,25 @@ void DirkSimple_drawsprite(DirkSimple_Sprite *sprite, int sx, int sy, int sw, in
                            int dx, int dy, int dw, int dh,
                            uint8_t rmod, uint8_t gmod, uint8_t bmod)
 {
-    // printf("📦 drawsprite name=%s sx=%d sy=%d dx=%d dy=%d\n", sprite->name, sx, sy, dx, dy);
     if (!sprite || !sprite->rgba) return;
 
-    pvr_ptr_t tex = (pvr_ptr_t)sprite->platform_handle;
     float u0 = (float)sx / sprite->width;
     float v0 = (float)sy / sprite->height;
     float u1 = (float)(sx + sw) / sprite->width;
     float v1 = (float)(sy + sh) / sprite->height;
 
-    pvr_poly_cxt_t cxt;
-    pvr_poly_hdr_t poly;
-    pvr_poly_cxt_txr(&cxt, PVR_LIST_TR_POLY,
-        PVR_TXRFMT_ARGB4444, sprite->width, sprite->height, tex, PVR_FILTER_BILINEAR);
-    cxt.gen.alpha = PVR_ALPHA_ENABLE;
-    cxt.gen.culling = PVR_CULLING_NONE;
-    pvr_poly_compile(&poly, &cxt);
-    pvr_prim(&poly, sizeof(poly));
-
     uint32_t color = (0xFF << 24) | (rmod << 16) | (gmod << 8) | bmod;
 
-    pvr_vertex_t vtx;
-    vtx.flags = PVR_CMD_VERTEX;
-    vtx.z = 1.0f;
-    vtx.argb = color;
-    vtx.oargb = 0;
+    sprite_vert[0] = (pvr_vertex_t){.flags = PVR_CMD_VERTEX,     .x = dx,       .y = dy,       .z = 1.0f, .u = u0, .v = v0, .argb = color, .oargb = 0};
+    sprite_vert[1] = (pvr_vertex_t){.flags = PVR_CMD_VERTEX,     .x = dx + dw,  .y = dy,       .z = 1.0f, .u = u1, .v = v0, .argb = color, .oargb = 0};
+    sprite_vert[2] = (pvr_vertex_t){.flags = PVR_CMD_VERTEX,     .x = dx,       .y = dy + dh,  .z = 1.0f, .u = u0, .v = v1, .argb = color, .oargb = 0};
+    sprite_vert[3] = (pvr_vertex_t){.flags = PVR_CMD_VERTEX_EOL, .x = dx + dw,  .y = dy + dh,  .z = 1.0f, .u = u1, .v = v1, .argb = color, .oargb = 0};
 
-    vtx.x = dx;         vtx.y = dy;         vtx.u = u0; vtx.v = v0;
-    pvr_prim(&vtx, sizeof(vtx));
-    vtx.x = dx + dw;    vtx.y = dy;         vtx.u = u1; vtx.v = v0;
-    pvr_prim(&vtx, sizeof(vtx));
-    vtx.x = dx;         vtx.y = dy + dh;    vtx.u = u0; vtx.v = v1;
-    pvr_prim(&vtx, sizeof(vtx));
-    vtx.flags = PVR_CMD_VERTEX_EOL;
-    vtx.x = dx + dw;    vtx.y = dy + dh;    vtx.u = u1; vtx.v = v1;
-    pvr_prim(&vtx, sizeof(vtx));
+    sq_fast_cpy((void *)SQ_MASK_DEST(PVR_TA_INPUT), &sprite_hdr, 1);
+    sq_fast_cpy((void *)SQ_MASK_DEST(PVR_TA_INPUT), sprite_vert, 4);
 }
+
+
 
 void DirkSimple_destroysprite(DirkSimple_Sprite *sprite)
 {
