@@ -197,7 +197,7 @@ void DirkSimple_panic(const char *str) {
 }
 
 void DirkSimple_writelog(const char *str) {
-    printf("[DirkSimple] %s\n", str);
+    // printf("[DirkSimple] %s\n", str);
 }
 
 void *DirkSimple_malloc(size_t len) { return malloc(len); }
@@ -928,8 +928,8 @@ static int luahook_DirkSimple_draw_sprite(lua_State *L)
 
 static int luahook_DirkSimple_log(lua_State *L)
 {
-    const char *str = lua_tostring(L, 1);
-    DirkSimple_log("%s", str);
+    // const char *str = lua_tostring(L, 1);
+    // DirkSimple_log("%s", str);
     return 0;
 }
 
@@ -1141,8 +1141,8 @@ void seek_to_frame(int new_frame) {
     if (new_frame < 0) new_frame = 0;
     if (new_frame >= num_frames) new_frame = num_frames - 1;
 
-    int old_frame = atomic_load(&frame_index);
-    double old_audio_time = atomic_load(&audio_start_time_ms);
+    // int old_frame = atomic_load(&frame_index);
+    // double old_audio_time = atomic_load(&audio_start_time_ms);
 
     // printf("🔄 Seeking from frame %d to frame %d\n", old_frame, new_frame);
 
@@ -1201,9 +1201,9 @@ void seek_to_frame(int new_frame) {
     atomic_store(&audio_start_time_ms, new_audio_time);
     atomic_store(&audio_bytes_fed, 0);  // optional
 
-    printf("🔄 Seek complete: frame %d → %d | audio %.2fms → %.2fms | byte offset: %d\n",
-        old_frame, new_frame, old_audio_time, new_audio_time,
-        bytes_to_skip - audio_offset);
+    // printf("🔄 Seek complete: frame %d → %d | audio %.2fms → %.2fms | byte offset: %d\n",
+    //     old_frame, new_frame, old_audio_time, new_audio_time,
+    //     bytes_to_skip - audio_offset);
 
     // Unmute after sync reset
     // atomic_store(&audio_muted, 0);
@@ -1734,6 +1734,7 @@ static void fmv_tick(uint64_t now_ms) {
         GClipStartTicks = GTicks;
         atomic_store(&audio_muted, 0);  // ✅ Move unmute here
     }
+    int current_frame = atomic_load(&frame_index);
     static int muted_after_seek = 0;
     if (req >= 0) {
         muted_after_seek = 1;
@@ -1749,7 +1750,7 @@ static void fmv_tick(uint64_t now_ms) {
         printf("🎯 psTimer()=%.2fms, anchor=%.2fms, elapsed=%.2fms\n", current_time, frame_timer_anchor, elapsed_ms);
         printed = 1;
     }    
-    int current_frame = atomic_load(&frame_index);
+
     double expected_video_time = current_frame * frame_duration;
 
     // Adjust target time with frame debt
@@ -1762,16 +1763,17 @@ static void fmv_tick(uint64_t now_ms) {
     // Frame skipping logic
     int frames_to_skip = 0;
     int temp_frame = current_frame;
-    while ((temp_frame < num_frames) && (temp_frame * frame_duration < current_audio_time_ms)) {
+    const double max_lag_ms = 52.0; 
+    while ((temp_frame < num_frames) && (temp_frame * frame_duration + max_lag_ms < current_audio_time_ms)) {
         temp_frame++;
         frames_to_skip++;
-        accumulated_frame_debt = 0.0;
+        accumulated_frame_debt *= 0.5;
     }
 
     if (frames_to_skip > 0) {
-        // printf("⚠️ Skipping %d frame(s): %d → %d (audio ahead by %.1fms)\n",
-        //        frames_to_skip, current_frame, temp_frame,
-        //        current_audio_time_ms - expected_video_time);
+        printf("⚠️ Skipping %d frame(s): %d → %d (audio ahead by %.1fms)\n",
+               frames_to_skip, current_frame, temp_frame,
+               current_audio_time_ms - expected_video_time);
         atomic_fetch_add(&frame_index, frames_to_skip);
         frames_dropped += frames_to_skip;
         current_frame = temp_frame;
@@ -1806,7 +1808,7 @@ static void fmv_tick(uint64_t now_ms) {
                 atomic_fetch_add(&frame_index, 1);
                 stall_count = 0;
                 for (int i = 0; i < 3; i++) {
-                    int recover = atomic_load(&frame_index) + i;
+                    int recover = current_frame + i;
                     if (recover < num_frames)
                         schedule_frame_preload(recover);
                 }
