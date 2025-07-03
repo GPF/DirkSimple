@@ -12,7 +12,7 @@ local starting_lives = 5
 local infinite_lives = false  -- set to true to not lose a life on failure.
 local god_mode = false  -- if true, game plays correct moves automatically, so you never fail.
 local play_sounds = true  -- if true, beeps and buzzes play when appropriate, otherwise, skipped.
-local draw_hints = true  -- if true, draws hint on what button to press.
+local draw_hints = false  -- if true, draws hint on what button to press.
 
 DirkSimple.cvars = {
     { name="starting_lives", desc="Number of lives player starts with", values="5|4|3|2|1", setter=function(name, value) starting_lives = DirkSimple.to_int(value) end },
@@ -3987,7 +3987,7 @@ scenes = {
 
         seq10 = {
             start_time = time_laserdisc_noseek(),
-            timeout = { when=time_to_ms(5, 676), nextsequence=nil }
+            timeout = { when=time_to_ms(3, 441), nextsequence=nil }
         },
 
         seq11 = {
@@ -4118,7 +4118,7 @@ scenes = {
 
         seq10 = {
             start_time = time_laserdisc_noseek(),
-            timeout = { when=time_to_ms(5, 438), nextsequence=nil }
+            timeout = { when=time_to_ms(3, 203), nextsequence=nil }
         },
 
         seq11 = {
