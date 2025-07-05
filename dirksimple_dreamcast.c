@@ -107,7 +107,7 @@ static int GNumRenderCommands = 0;
 static int GNumAllocatedRenderCommands = 0;
 void send_rendering_primitives(void);
 #define DCMV_MAGIC "DCMV"
-#define NUM_BUFFERS 4
+#define NUM_BUFFERS 8
 #define RING_CAPACITY (NUM_BUFFERS + 1)
 #define INVALID_FRAME -1
 
@@ -116,6 +116,13 @@ enum BufState {
     BUF_LOADING = 1,
     BUF_READY = 2
 };
+
+typedef struct {
+    int frame;
+    int generation;
+} PreloadJob;
+
+static PreloadJob preload_ring[RING_CAPACITY];
 
 // static ZSTD_DCtx *dctx;
 static FILE *fp = NULL;
@@ -128,7 +135,7 @@ static float fps, frame_duration;
 static pvr_ptr_t pvr_txr;
 static pvr_poly_hdr_t hdr;
 static pvr_ptr_t sprite_txr;
-static pvr_poly_hdr_t sprite_hdr;
+// static pvr_poly_hdr_t sprite_hdr;
 static pvr_vertex_t vert[4];
 static pvr_vertex_t sprite_vert[4];
 static snd_stream_hnd_t stream;
@@ -140,7 +147,7 @@ static _Atomic size_t audio_bytes_fed = 0;
 static double frame_timer_anchor = 0.0;
 static _Atomic int buf_state[NUM_BUFFERS];
 static atomic_int preload_ring_head = 0, preload_ring_tail = 0;
-static atomic_int preload_ring[RING_CAPACITY];
+// static atomic_int preload_ring[RING_CAPACITY];
 static volatile int audio_started = 0;
 static lua_State *GLua = NULL;
 static double psTimer(void) {
@@ -197,7 +204,7 @@ void DirkSimple_panic(const char *str) {
 }
 
 void DirkSimple_writelog(const char *str) {
-    // printf("[DirkSimple] %s\n", str);
+    printf("[DirkSimple] %s\n", str);
 }
 
 void *DirkSimple_malloc(size_t len) { return malloc(len); }
@@ -296,6 +303,18 @@ static int load_frame(int frame_num, int buf_index) {
 
 }
 
+static void draw_ui_only_frame(void)
+{
+    pvr_scene_begin();
+
+    // Skip video poly pass — no PVR texture loaded
+    pvr_list_begin(PVR_LIST_TR_POLY);
+    send_rendering_primitives();  // Includes text, HUD, sprite drawing
+    pvr_list_finish();
+
+    pvr_scene_finish();
+}
+
 static void draw_frame(int buf_index) {
     pvr_txr_load(frame_buffer[buf_index], pvr_txr, video_frame_size);
 
@@ -323,12 +342,21 @@ static void *worker_thread(void *arg) {
     (void)arg;
     while (1) {
         // ✅ Only poll audio if unmuted
-            snd_stream_poll(stream);
+        snd_stream_poll(stream);
 
         int tail = atomic_load(&preload_ring_tail);
         if (tail != atomic_load(&preload_ring_head)) {
-            int frame = preload_ring[tail];
+            PreloadJob job = preload_ring[tail];
+
+            if (job.generation != GSeekGeneration) {
+                // 🧹 Stale job from old seek, skip it
+                atomic_store(&preload_ring_tail, (tail + 1) % RING_CAPACITY);
+                continue;
+            }
+
+            int frame = job.frame;
             int buf = frame % NUM_BUFFERS;
+
             if (atomic_load(&buf_state[buf]) == BUF_EMPTY) {
                 atomic_store(&buf_state[buf], BUF_LOADING);
                 if (load_frame(frame, buf) == 0)
@@ -336,6 +364,7 @@ static void *worker_thread(void *arg) {
                 else
                     atomic_store(&buf_state[buf], BUF_EMPTY);
             }
+
             atomic_store(&preload_ring_tail, (tail + 1) % RING_CAPACITY);
         }
 
@@ -726,28 +755,43 @@ static void set_string(lua_State *L, const char *str, const char *sym)
 
 uint8_t *DirkSimple_loadpng(const char *fname, int *_w, int *_h)
 {
-    // Let get_cached_sprite() use this to allocate PVR memory
-    sprite_txr = pvr_mem_malloc(512 * 32 * 2);  // adjust size if needed
-    png_to_texture(fname, sprite_txr, PNG_NO_ALPHA);
+    uint32 w = 0, h = 0;
+    pvr_ptr_t tex = NULL;
+    printf("[png] Loading width=%p, height=%p from '%s'\n",
+           _w, _h, fname);
+    if (png_load_texture(fname, &tex, PNG_NO_ALPHA, &w, &h) < 0) {
+        DirkSimple_panic("Failed to load PNG with png_load_texture()");
+    }
 
-    if (_w) *_w = 512;  // your sprite sheet dimensions
-    if (_h) *_h = 32;
+    if (_w) *_w = w;
+    if (_h) *_h = h;
 
-    return (uint8_t *)sprite_txr;
+    printf("[png] Loaded '%s' as texture %p (%ux%u)\n",
+           fname, tex, w, h);
+
+    // sprite_txr = tex;
+    return (uint8_t *)tex;
 }
+
 
 static DirkSimple_Sprite *get_cached_sprite(const char *name)
 {
-    if (GSprites) return GSprites;  // Already loaded
-
-    // Lowercase name
+    // Lowercase the name
     char *loweredname = DirkSimple_xstrdup(name);
     for (int i = 0; loweredname[i]; i++) {
         if (loweredname[i] >= 'A' && loweredname[i] <= 'Z')
             loweredname[i] = loweredname[i] - ('A' - 'a');
     }
 
-    // Build full path
+    // ✅ Search for existing sprite in cache
+    for (DirkSimple_Sprite *sprite = GSprites; sprite != NULL; sprite = sprite->next) {
+        if (strcmp(sprite->name, loweredname) == 0) {
+            DirkSimple_free(loweredname);
+            return sprite;
+        }
+    }
+
+    // ❌ Not cached — load it
     const size_t slen = strlen(GGameDir) + strlen(loweredname) + 8;
     char *sprite_png = DirkSimple_xmalloc(slen);
     snprintf(sprite_png, slen, "%s%s.png", GGameDir, loweredname);
@@ -760,23 +804,26 @@ static DirkSimple_Sprite *get_cached_sprite(const char *name)
         DirkSimple_panic("Failed to load sprite PNG");
     }
 
-    // Compile sprite header once here
+    // Compile PVR sprite header
     pvr_poly_cxt_t sprite_cxt;
     pvr_poly_cxt_txr(&sprite_cxt, PVR_LIST_TR_POLY,
         PVR_TXRFMT_ARGB4444, w, h, tex, PVR_FILTER_BILINEAR);
     sprite_cxt.gen.alpha = PVR_ALPHA_ENABLE;
     sprite_cxt.gen.culling = PVR_CULLING_NONE;
-    pvr_poly_compile(&sprite_hdr, &sprite_cxt);
 
-    // Store and return sprite
+
+    // 🔧 Allocate and add to linked list
     DirkSimple_Sprite *sprite = DirkSimple_xmalloc(sizeof (DirkSimple_Sprite));
+
     sprite->name = loweredname;
     sprite->width = w;
     sprite->height = h;
     sprite->rgba = (uint8_t *) tex;
     sprite->platform_handle = (void *) tex;
-    sprite->next = NULL;
+    sprite->next = GSprites;
     GSprites = sprite;
+    
+    pvr_poly_compile(&sprite->sprite_hdr, &sprite_cxt);
     return sprite;
 }
 
@@ -856,6 +903,9 @@ void send_rendering_primitives(void) {
     for (int i = 0; i < GNumRenderCommands; ++i) {
         RenderCommand *cmd = &GRenderCommands[i];
         switch (cmd->prim) {
+            case RENDPRIM_CLEAR:
+                DirkSimple_clearscreen(cmd->data.clear.r, cmd->data.clear.g, cmd->data.clear.b);
+                break;            
             case RENDPRIM_SPRITE:
             {
                 int dx = (int)(cmd->data.sprite.dx * VIDEO_SCALE_X + VIDEO_OFFSET_X);
@@ -900,15 +950,25 @@ void send_rendering_primitives(void) {
 
 static int luahook_DirkSimple_clear_screen(lua_State *L)
 {
-    // RenderCommand *cmd = new_render_command(RENDPRIM_CLEAR);
-    // cmd->data.clear.r = (uint8_t) lua_tonumber(L, 1);
-    // cmd->data.clear.g = (uint8_t) lua_tonumber(L, 2);
-    // cmd->data.clear.b = (uint8_t) lua_tonumber(L, 3);
+    // DirkSimple_log("Clearing screen with color (%d, %d, %d)",
+    //               (int) lua_tonumber(L, 1),
+    //               (int) lua_tonumber(L, 2),
+    //               (int) lua_tonumber(L, 3));
+    RenderCommand *cmd = new_render_command(RENDPRIM_CLEAR);
+    cmd->data.clear.r = (uint8_t) lua_tonumber(L, 1);
+    cmd->data.clear.g = (uint8_t) lua_tonumber(L, 2);
+    cmd->data.clear.b = (uint8_t) lua_tonumber(L, 3);
     return 0;
 }
 
 static int luahook_DirkSimple_draw_sprite(lua_State *L)
 {
+// printf("🖼️ draw_sprite: name=%s, sx=%d sy=%d sw=%d sh=%d dx=%d dy=%d dw=%d dh=%d\n",
+//     lua_tostring(L, 1),
+//     (int)lua_tonumber(L, 2), (int)lua_tonumber(L, 3),
+//     (int)lua_tonumber(L, 4), (int)lua_tonumber(L, 5),
+//     (int)lua_tonumber(L, 6), (int)lua_tonumber(L, 7),
+//     (int)lua_tonumber(L, 8), (int)lua_tonumber(L, 9));
     RenderCommand *cmd = new_render_command(RENDPRIM_SPRITE);
     snprintf(cmd->data.sprite.name, sizeof (cmd->data.sprite.name), "%s", lua_tostring(L, 1));
     cmd->data.sprite.sx = (int32_t) lua_tonumber(L, 2);
@@ -928,8 +988,8 @@ static int luahook_DirkSimple_draw_sprite(lua_State *L)
 
 static int luahook_DirkSimple_log(lua_State *L)
 {
-    // const char *str = lua_tostring(L, 1);
-    // DirkSimple_log("%s", str);
+    const char *str = lua_tostring(L, 1);
+    DirkSimple_log("%s", str);
     return 0;
 }
 
@@ -989,6 +1049,7 @@ static void register_lua_libs(lua_State *L)
         lua_pop(L, 1);  // remove lib
     }
 }
+
 uint64_t poll_controller_input(void) {
     uint64_t inputbits = 0;
     maple_device_t *dev = maple_enum_type(0, MAPLE_FUNC_CONTROLLER);
@@ -1015,10 +1076,11 @@ uint64_t poll_controller_input(void) {
             if (state->buttons & CONT_B) {
                 inputbits |= DIRKSIMPLE_INPUT_COINSLOT;
                 // printf("🅱️ CONT_B (Coin Slot) detected\n");
+                vid_screen_shot("/pc/screenshot.ppm");                
             }
             if (state->buttons & CONT_Y) {
                 inputbits |= DIRKSIMPLE_INPUT_START;
-                // printf("🟡 CONT_Y (Start) detected\n");
+                printf("🟡 CONT_Y (Start) detected\n");
             }
             if (state->buttons & CONT_DPAD_UP) {
                 inputbits |= DIRKSIMPLE_INPUT_UP;
@@ -1101,38 +1163,30 @@ static int luahook_DirkSimple_show_single_frame(lua_State *L)
 }
 
 bool schedule_frame_preload(int frame) {
-  int buf = frame % NUM_BUFFERS;
-    
-    // Check if buffer is already in use
+    int buf = frame % NUM_BUFFERS;
+
     int current_state = atomic_load(&buf_state[buf]);
-    if (current_state != BUF_EMPTY) {
-        // Don't schedule if buffer is already occupied
+    if (current_state != BUF_EMPTY)
         return false;
-    }
-    
+
     int head = atomic_load(&preload_ring_head);
     int tail = atomic_load(&preload_ring_tail);
     int next_head = (head + 1) % RING_CAPACITY;
 
-    if (next_head == tail) {
+    if (next_head == tail)
         return false; // Ring full
-    }
 
-    // Check for duplicates in ring
+    // Check for duplicates
     for (int i = tail; i != head; i = (i + 1) % RING_CAPACITY) {
-        if (preload_ring[i] == frame) {
-            return false; // Already scheduled
-        }
-        
-        // Also check for buffer conflicts in ring
-        if ((preload_ring[i] % NUM_BUFFERS) == buf) {
-            printf("🔧 Buffer conflict: frame %d conflicts with queued frame %d (both use buf %d)\n", 
-                   frame, preload_ring[i], buf);
+        if (preload_ring[i].frame == frame || (preload_ring[i].frame % NUM_BUFFERS) == buf) {
+            printf("🔧 Buffer conflict: frame %d conflicts with queued frame %d (both use buf %d)\n",
+                   frame, preload_ring[i].frame, buf);
             return false;
         }
     }
 
-    preload_ring[head] = frame;
+    preload_ring[head].frame = frame;
+    preload_ring[head].generation = GSeekGeneration;
     atomic_store(&preload_ring_head, next_head);
     return true;
 }
@@ -1200,7 +1254,7 @@ void seek_to_frame(int new_frame) {
     frame_timer_anchor = psTimer();
     atomic_store(&audio_start_time_ms, new_audio_time);
     atomic_store(&audio_bytes_fed, 0);  // optional
-
+    GHalted = 0;  // Reset halted state
     // printf("🔄 Seek complete: frame %d → %d | audio %.2fms → %.2fms | byte offset: %d\n",
     //     old_frame, new_frame, old_audio_time, new_audio_time,
     //     bytes_to_skip - audio_offset);
@@ -1229,6 +1283,7 @@ void DirkSimple_start_clip(uint32_t startms) {
 int luahook_DirkSimple_start_clip(lua_State *L)
 {
     const uint32_t startms = (uint32_t) lua_tonumber(L, 1);
+    DirkSimple_log("Lua requested start_clip at %u ms", startms);
     DirkSimple_start_clip(startms);  // ✅ Use the real function
     return 0;
 }
@@ -1236,14 +1291,19 @@ int luahook_DirkSimple_start_clip(lua_State *L)
 static void DirkSimple_halt_video(void)
 {
     if (!GDecoderActive) return;
+
     DirkSimple_log("HALT VIDEO");
 
-    GShowingSingleFrame = 0;  // ✅ Reset single-frame mode
-    GHalted = 1;              // ✅ Halt playback
-
+    GHalted = 1;
+    GShowingSingleFrame = 0;
+    GClipStartTicks = GTicks;
+    GSeekGeneration--;  // invalidate preload queue
     DirkSimple_cleardiscaudio();
+    
+    // force a frame draw to "freeze" screen (optional)
     DirkSimple_discvideo(NULL);
 }
+
 
 static int luahook_DirkSimple_halt_video(lua_State *L)
 {
@@ -1442,6 +1502,7 @@ static void setup_game_strings(const char *basedir, const char *gamepath, const 
     slen = strlen(GDataDir) + strlen(GGameName) + 32;
     GGameDir = (char *) DirkSimple_xmalloc(slen);
     snprintf(GGameDir, slen, "%s/%s/", GDataDir, GGameName);
+    printf("Game directory: %s, gamename: %s\n", GGameDir, GGameName);
 }
 
 
@@ -1469,17 +1530,35 @@ void DirkSimple_cleardiscaudio(void) {
 }
 void DirkSimple_clearscreen(uint8_t r, uint8_t g, uint8_t b)
 {
-    // if (GRenderer) {
-    //     SDL_SetRenderDrawColor(GRenderer, r, g, b, 255);
-    //     SDL_RenderClear(GRenderer);
-    // }
+    // Start scene if not already begun (safe: draw_ui_only_frame handles this)
+    uint32_t color = (0xFF << 24) | (r << 16) | (g << 8) | b;
+
+    // Submit a full-screen quad to clear background
+    pvr_vertex_t vtx[4] = {
+        {.flags = PVR_CMD_VERTEX,     .x = 0,   .y = 0,   .z = 0.5f, .argb = color, .oargb = 0},
+        {.flags = PVR_CMD_VERTEX,     .x = 640, .y = 0,   .z = 0.5f, .argb = color, .oargb = 0},
+        {.flags = PVR_CMD_VERTEX,     .x = 0,   .y = 480, .z = 0.5f, .argb = color, .oargb = 0},
+        {.flags = PVR_CMD_VERTEX_EOL, .x = 640, .y = 480, .z = 0.5f, .argb = color, .oargb = 0},
+    };
+
+    pvr_poly_cxt_t cxt;
+    pvr_poly_hdr_t hdr;
+    pvr_poly_cxt_col(&cxt, PVR_LIST_TR_POLY);  // Use TR to ensure it blends correctly
+    cxt.gen.culling = PVR_CULLING_NONE;
+    pvr_poly_compile(&hdr, &cxt);
+    sq_fast_cpy((void *)SQ_MASK_DEST(PVR_TA_INPUT), &hdr, 1);
+    sq_fast_cpy((void *)SQ_MASK_DEST(PVR_TA_INPUT), vtx, 4);
 }
+
 void DirkSimple_drawsprite(DirkSimple_Sprite *sprite, int sx, int sy, int sw, int sh,
                            int dx, int dy, int dw, int dh,
                            uint8_t rmod, uint8_t gmod, uint8_t bmod)
 {
     if (!sprite || !sprite->rgba) return;
-
+    // int pot_w = 1 << (32 - __builtin_clz(dw - 1));
+    // int pot_h = 1 << (32 - __builtin_clz(dh - 1));
+    // DirkSimple_log("Drawing sprite '%s' at (%d, %d) with size (%d, %d) to (%d, %d) with size (%d, %d)",
+    //               sprite->name, sx, sy, sw, sh, dx, dy, dw, dh);
     float u0 = (float)sx / sprite->width;
     float v0 = (float)sy / sprite->height;
     float u1 = (float)(sx + sw) / sprite->width;
@@ -1492,7 +1571,7 @@ void DirkSimple_drawsprite(DirkSimple_Sprite *sprite, int sx, int sy, int sw, in
     sprite_vert[2] = (pvr_vertex_t){.flags = PVR_CMD_VERTEX,     .x = dx,       .y = dy + dh,  .z = 1.0f, .u = u0, .v = v1, .argb = color, .oargb = 0};
     sprite_vert[3] = (pvr_vertex_t){.flags = PVR_CMD_VERTEX_EOL, .x = dx + dw,  .y = dy + dh,  .z = 1.0f, .u = u1, .v = v1, .argb = color, .oargb = 0};
 
-    sq_fast_cpy((void *)SQ_MASK_DEST(PVR_TA_INPUT), &sprite_hdr, 1);
+    sq_fast_cpy((void *)SQ_MASK_DEST(PVR_TA_INPUT), &sprite->sprite_hdr, 1);
     sq_fast_cpy((void *)SQ_MASK_DEST(PVR_TA_INPUT), sprite_vert, 4);
 }
 
@@ -1566,7 +1645,7 @@ void DirkSimple_startup(const char *basedir, const char *gamepath, const char *g
     atomic_store(&audio_start_time_ms, 0.0);
     thd_create(0, worker_thread, NULL);
         // DirkSimple_shutdown();  // safe to call even if not started up at the moment.
-
+    printf("[startup] DirkSimple started with gamepath: %s and gamename: %s\n", gamepath, gamename);
     setup_game_strings(basedir, gamepath, gamename);
     setup_lua();
     GDecoderActive = 1;
@@ -1763,7 +1842,7 @@ static void fmv_tick(uint64_t now_ms) {
     // Frame skipping logic
     int frames_to_skip = 0;
     int temp_frame = current_frame;
-    const double max_lag_ms = 52.0; 
+    const double max_lag_ms = 65.0; 
     while ((temp_frame < num_frames) && (temp_frame * frame_duration + max_lag_ms < current_audio_time_ms)) {
         temp_frame++;
         frames_to_skip++;
@@ -1859,29 +1938,28 @@ void DirkSimple_restart(void)  // DO NOT CALL THIS FROM LUA CODE
     }
     setup_lua();
 }
+static int last_seen_seek_generation = -1;
 
 void DirkSimple_tick(uint64_t monotonic_ms, uint64_t inputbits)
 {
     if (GRestartOnYPress && inputbit_is_pressed(inputbits, GPreviousInputBits, DIRKSIMPLE_INPUT_START)) {
-        printf("🔁 Restart triggered via Y button at 6200ms frame\n");
-        DirkSimple_restart();  // ✅ restart Lua state and game
-        GRestartOnYPress = 0;  // ✅ clear flag
-        return;  // optionally skip the rest of the tick
-    }    
-    // 1. If video is halted, skip playback
-    if (GHalted) return;
-    
-    // 2. Calculate GTicks based on psTimer wall clock
+        printf("🔁 Restart triggered via Y button at %llu ms frame\n", monotonic_ms);
+        DirkSimple_restart();
+        GRestartOnYPress = 0;
+        return;
+    }
+
     if (GTicksOffset == 0) {
         if (monotonic_ms < 2) return;
         GTicksOffset = monotonic_ms - 1;
     } else if (GTicksOffset > monotonic_ms) {
         DirkSimple_panic("Time ran backwards! Aborting!");
     }
+
     GTicks = monotonic_ms - GTicksOffset;
 
-    // 3. Call Lua tick function if not seeking
     const unsigned int expected_seek_generation = GSeekGeneration;
+
     if (GNeedInitialLuaTick) {
         GNeedInitialLuaTick = 0;
         call_lua_tick(GLua, 0, 0, inputbits);
@@ -1889,23 +1967,29 @@ void DirkSimple_tick(uint64_t monotonic_ms, uint64_t inputbits)
         call_lua_tick(GLua, GTicks, (GTicks - GClipStartTicks), inputbits);
     }
 
-    if (GHalted) return;
-
-    if (expected_seek_generation != GSeekGeneration) return;
+    if (GHalted || expected_seek_generation != GSeekGeneration) {
+        draw_ui_only_frame();
+        GPreviousInputBits = inputbits;
+        return;
+    }
+        fmv_tick(monotonic_ms);
 
     
-    fmv_tick(monotonic_ms);
-    // send_rendering_primitives();
+
+    // ✅ Always draw frame (e.g. HUD, clear_screen, sprites)
+
+
     GPreviousInputBits = inputbits;
-    // }
 }
+
 
 
 int main(int argc, char **argv) {
     (void)argc; (void)argv;
     printf("💡 MAIN STARTED\n");
 
-    DirkSimple_startup("/pc/data/games/lair", "/pc/data/games/lair/lair.dcmv", "lair", DIRKSIMPLE_PIXFMT_RGB565);
+    DirkSimple_startup("/pc/data/games/", "/pc/data/games/lair/lair.dcmv", "lair", DIRKSIMPLE_PIXFMT_RGB565);
+    // DirkSimple_startup("/pc/data/games/", "/pc/data/games/cliff/cliff.dcmv", "cliff", DIRKSIMPLE_PIXFMT_RGB565);
     printf("[main] DirkSimple running...\n");
 
     while (1) {
@@ -1913,36 +1997,10 @@ int main(int argc, char **argv) {
         uint64_t inputbits = poll_controller_input();
         // DirkSimple_beginframe();
         DirkSimple_tick(now_ms, inputbits);
+
         // DirkSimple_endframe();
         thd_sleep(1);
     }
 
     return 0;
 }
-
-
-
-
-
-
-
-
-// const char *DirkSimple_gamename(void) {
-//     return "lair";
-// }
-
-
-// const char *DirkSimple_datadir(void) {
-//     return "/pc/data";
-// }
-
-
-// const char *DirkSimple_gamedir(void) {
-//     return "/pc/data/games/lair";
-// }
-
-
-
-
-
-

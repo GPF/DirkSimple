@@ -9,6 +9,10 @@
 #ifndef INCL_DIRKSIMPLE_PLATFORM_H
 #define INCL_DIRKSIMPLE_PLATFORM_H
 
+#ifdef __DREAMCAST__
+#include <dc/pvr.h>
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -174,6 +178,9 @@ struct DirkSimple_Sprite
     int height;
     uint8_t *rgba;
     void *platform_handle;
+#ifdef __DREAMCAST__    
+    pvr_poly_hdr_t sprite_hdr;
+#endif    
     DirkSimple_Sprite *next;
 };
 
