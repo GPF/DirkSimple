@@ -65,6 +65,8 @@ static uint64_t GClipStartTicks = 0;
 static uint64_t GTicks = 0;
 static uint64_t GTicksOffset = 0;
 static int GDecoderActive = 0;
+static int GSeeking = 0;
+static int GSeekTargetFrame = -1;
 static atomic_int seek_request = -1;
 static int GRestartOnYPress = 0;
 // static int GAudioChannels = 0;
@@ -107,7 +109,7 @@ static int GNumRenderCommands = 0;
 static int GNumAllocatedRenderCommands = 0;
 void send_rendering_primitives(void);
 #define DCMV_MAGIC "DCMV"
-#define NUM_BUFFERS 8
+#define NUM_BUFFERS 16
 #define RING_CAPACITY (NUM_BUFFERS + 1)
 #define INVALID_FRAME -1
 
@@ -1195,10 +1197,10 @@ void seek_to_frame(int new_frame) {
     if (new_frame < 0) new_frame = 0;
     if (new_frame >= num_frames) new_frame = num_frames - 1;
 
-    // int old_frame = atomic_load(&frame_index);
-    // double old_audio_time = atomic_load(&audio_start_time_ms);
+    int old_frame = atomic_load(&frame_index);
+    double old_audio_time = atomic_load(&audio_start_time_ms);
 
-    // printf("🔄 Seeking from frame %d to frame %d\n", old_frame, new_frame);
+    printf("🔄 Seeking from frame %d to frame %d\n", old_frame, new_frame);
 
     // Stop audio and mute
     fclose(audio_fp);
@@ -1277,6 +1279,7 @@ void DirkSimple_start_clip(uint32_t startms) {
     DirkSimple_log("START CLIP: GTicks %llu, startms %u → frame %d", GTicks, startms, frame);
 
     atomic_store(&seek_request, frame);
+    
     collect_lua_garbage(GLua);
 }
 
@@ -1842,7 +1845,7 @@ static void fmv_tick(uint64_t now_ms) {
     // Frame skipping logic
     int frames_to_skip = 0;
     int temp_frame = current_frame;
-    const double max_lag_ms = 65.0; 
+    const double max_lag_ms = 52.0; 
     while ((temp_frame < num_frames) && (temp_frame * frame_duration + max_lag_ms < current_audio_time_ms)) {
         temp_frame++;
         frames_to_skip++;
@@ -1958,6 +1961,37 @@ void DirkSimple_tick(uint64_t monotonic_ms, uint64_t inputbits)
 
     GTicks = monotonic_ms - GTicksOffset;
 
+    // 🔄 Delay Lua tick() and FMV logic until frame seek completes
+    if (GSeeking) {
+        int buf = GSeekTargetFrame % NUM_BUFFERS;
+        if (atomic_load(&buf_state[buf]) == BUF_READY) {
+            draw_frame(buf);
+            atomic_store(&buf_state[buf], BUF_EMPTY);
+            atomic_store(&frame_index, GSeekTargetFrame + 1);
+
+            frame_timer_anchor = psTimer();
+            atomic_store(&audio_start_time_ms, GSeekTargetFrame * frame_duration);
+            atomic_store(&audio_bytes_fed, 0);
+            atomic_store(&audio_muted, 0);
+
+            GClipStartTicks = GTicks;
+            GSeekTargetFrame = -1;
+            GSeeking = 0;
+
+            DirkSimple_log("✅ Seek complete at GTicks=%llu, anchor=%.2fms", GTicks, frame_timer_anchor);
+        } else {
+            draw_ui_only_frame();  // just show UI while waiting
+            GPreviousInputBits = inputbits;
+            return;
+        }
+    }
+
+    if (GShowingSingleFrame) {
+        call_lua_tick(GLua, GTicks, (GClipStartTicks ? (GTicks - GClipStartTicks) : 0), inputbits);
+        GPreviousInputBits = inputbits;
+        return;
+    }
+
     const unsigned int expected_seek_generation = GSeekGeneration;
 
     if (GNeedInitialLuaTick) {
@@ -1972,15 +2006,12 @@ void DirkSimple_tick(uint64_t monotonic_ms, uint64_t inputbits)
         GPreviousInputBits = inputbits;
         return;
     }
-        fmv_tick(monotonic_ms);
 
-    
-
-    // ✅ Always draw frame (e.g. HUD, clear_screen, sprites)
-
+    fmv_tick(monotonic_ms);  // continue FMV sync logic
 
     GPreviousInputBits = inputbits;
 }
+
 
 
 
@@ -1988,8 +2019,8 @@ int main(int argc, char **argv) {
     (void)argc; (void)argv;
     printf("💡 MAIN STARTED\n");
 
-    DirkSimple_startup("/pc/data/games/", "/pc/data/games/lair/lair.dcmv", "lair", DIRKSIMPLE_PIXFMT_RGB565);
-    // DirkSimple_startup("/pc/data/games/", "/pc/data/games/cliff/cliff.dcmv", "cliff", DIRKSIMPLE_PIXFMT_RGB565);
+    // DirkSimple_startup("/pc/data/games/", "/pc/data/games/lair/lair.dcmv", "lair", DIRKSIMPLE_PIXFMT_RGB565);
+    DirkSimple_startup("/pc/data/games/", "/pc/data/games/cliff/cliff.dcmv", "cliff", DIRKSIMPLE_PIXFMT_RGB565);
     printf("[main] DirkSimple running...\n");
 
     while (1) {
