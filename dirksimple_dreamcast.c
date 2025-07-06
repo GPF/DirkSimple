@@ -268,10 +268,25 @@ void DirkSimple_videoformat(const char *title, uint32_t w, uint32_t h, double _f
         PVR_TXRFMT_RGB565 | PVR_TXRFMT_TWIDDLED | PVR_TXRFMT_VQ_ENABLE,
         video_width, video_height, pvr_txr, PVR_FILTER_BILINEAR);
     pvr_poly_compile(&hdr, &cxt);
-    vert[0] = (pvr_vertex_t){.flags = PVR_CMD_VERTEX, .x=0, .y=0, .z=1, .u=0, .v=0, .argb=0xffffffff};
-    vert[1] = (pvr_vertex_t){.flags = PVR_CMD_VERTEX, .x=640, .y=0, .z=1, .u=1, .v=0, .argb=0xffffffff};
-    vert[2] = (pvr_vertex_t){.flags = PVR_CMD_VERTEX, .x=0, .y=480, .z=1, .u=0, .v=1, .argb=0xffffffff};
-    vert[3] = (pvr_vertex_t){.flags = PVR_CMD_VERTEX_EOL, .x=640, .y=480, .z=1, .u=1, .v=1, .argb=0xffffffff};
+    // vert[0] = (pvr_vertex_t){.flags = PVR_CMD_VERTEX, .x=0, .y=0, .z=1, .u=0, .v=0, .argb=0xffffffff};
+    // vert[1] = (pvr_vertex_t){.flags = PVR_CMD_VERTEX, .x=640, .y=0, .z=1, .u=1, .v=0, .argb=0xffffffff};
+    // vert[2] = (pvr_vertex_t){.flags = PVR_CMD_VERTEX, .x=0, .y=480, .z=1, .u=0, .v=1, .argb=0xffffffff};
+    // vert[3] = (pvr_vertex_t){.flags = PVR_CMD_VERTEX_EOL, .x=640, .y=480, .z=1, .u=1, .v=1, .argb=0xffffffff};
+    // vert[0] = (pvr_vertex_t){.flags = PVR_CMD_VERTEX, .x=80, .y=0, .z=1, .u=0.1875f, .v=0.03125f, .argb=0xffffffff};     // Top-left
+    // vert[1] = (pvr_vertex_t){.flags = PVR_CMD_VERTEX, .x=560, .y=0, .z=1, .u=0.8125f, .v=0.03125f, .argb=0xffffffff};    // Top-right
+    // vert[2] = (pvr_vertex_t){.flags = PVR_CMD_VERTEX, .x=80, .y=480, .z=1, .u=0.1875f, .v=0.96875f, .argb=0xffffffff};   // Bottom-left
+    // vert[3] = (pvr_vertex_t){.flags = PVR_CMD_VERTEX_EOL, .x=560, .y=480, .z=1, .u=0.8125f, .v=0.96875f, .argb=0xffffffff}; // Bottom-right   
+float u0 = 96.0f / 512.0f;             // = 0.1875f
+float u1 = (96.0f + 320.0f) / 512.0f;  // = 0.8125f
+float v0 = 8.0f / 256.0f;              // = 0.03125f
+float v1 = (8.0f + 240.0f) / 256.0f;   // = 0.96875f
+
+// Fullscreen 640x480 quad
+vert[0] = (pvr_vertex_t){.flags = PVR_CMD_VERTEX,    .x =   0, .y =   0, .z=1, .u=u0, .v=v0, .argb=0xffffffff};
+vert[1] = (pvr_vertex_t){.flags = PVR_CMD_VERTEX,    .x = 640, .y =   0, .z=1, .u=u1, .v=v0, .argb=0xffffffff};
+vert[2] = (pvr_vertex_t){.flags = PVR_CMD_VERTEX,    .x =   0, .y = 480, .z=1, .u=u0, .v=v1, .argb=0xffffffff};
+vert[3] = (pvr_vertex_t){.flags = PVR_CMD_VERTEX_EOL,.x = 640, .y = 480, .z=1, .u=u1, .v=v1, .argb=0xffffffff};
+
     // pvr_poly_cxt_t sprite_cxt;
     // sprite_txr = NULL; 
     // pvr_poly_cxt_txr(&sprite_cxt, PVR_LIST_TR_POLY,
@@ -2019,8 +2034,8 @@ int main(int argc, char **argv) {
     (void)argc; (void)argv;
     printf("💡 MAIN STARTED\n");
 
-    // DirkSimple_startup("/pc/data/games/", "/pc/data/games/lair/lair.dcmv", "lair", DIRKSIMPLE_PIXFMT_RGB565);
-    DirkSimple_startup("/pc/data/games/", "/pc/data/games/cliff/cliff.dcmv", "cliff", DIRKSIMPLE_PIXFMT_RGB565);
+    DirkSimple_startup("/pc/data/games/", "/pc/data/games/lair/lair.dcmv", "lair", DIRKSIMPLE_PIXFMT_RGB565);
+    // DirkSimple_startup("/pc/data/games/", "/pc/data/games/cliff/cliff.dcmv", "cliff", DIRKSIMPLE_PIXFMT_RGB565);
     printf("[main] DirkSimple running...\n");
 
     while (1) {
