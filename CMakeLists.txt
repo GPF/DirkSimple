@@ -16,6 +16,7 @@ target_link_libraries(dirksimple_dreamcast
     lua
     png
     lz4
+    fastmem
     m
     z
 )

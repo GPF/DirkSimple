@@ -6,6 +6,11 @@
 #include <dc/pvr.h>
 // #define ZSTD_STATIC_LINKING_ONLY
 // #include <zstd/zstd.h>
+#include <fastmem/fastmem.h>
+#define LZ4_memcpy(d,s,n) memcpy_fast((d),(s),(n))
+#define LZ4_memmove(d,s,n) memmove_fast((d),(s),(n))
+#define LZ4_memset(d,s,n) memset_fast((d),(s),(n))
+#define LZ4_FREESTANDING 1
 #include <lz4/lz4.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -301,6 +306,9 @@ static int load_frame(int frame_num, int buf_index) {
     uint32_t offset = frame_offsets[frame_num];
     uint32_t next_offset = frame_offsets[frame_num + 1];
     uint32_t compressed_size = next_offset - offset;
+
+    // double start = psTimer();
+
     fseek(fp, offset, SEEK_SET);
     fread(compressed_buffer, 1, compressed_size, fp);
     // size_t decompressed = ZSTD_decompressDCtx(dctx, frame_buffer[buf_index], video_frame_size,
@@ -316,6 +324,12 @@ static int load_frame(int frame_num, int buf_index) {
         printf("❌ LZ4 decompression failed on frame %d\n", frame_num);
         return -1;
     }
+
+        // double end = psTimer();
+        // double ms = (end - start);  // Already in milliseconds
+        // // printf("🧩 Frame %d decompressed from %ld to %d in %.2f ms:\n", frame_num, compressed_size, video_frame_size, ms);
+        // printf("🧩 Finished frame %d in %.2f ms\n", frame_num, ms);
+
     return 0;
 
 }
@@ -355,6 +369,7 @@ static void draw_frame(int buf_index) {
 
     pvr_scene_finish();
 }
+
 static void *worker_thread(void *arg) {
     (void)arg;
     while (1) {
@@ -1860,7 +1875,7 @@ static void fmv_tick(uint64_t now_ms) {
     // Frame skipping logic
     int frames_to_skip = 0;
     int temp_frame = current_frame;
-    const double max_lag_ms = 52.0; 
+    const double max_lag_ms = 70.0; 
     while ((temp_frame < num_frames) && (temp_frame * frame_duration + max_lag_ms < current_audio_time_ms)) {
         temp_frame++;
         frames_to_skip++;
